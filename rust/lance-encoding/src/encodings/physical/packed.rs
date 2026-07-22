@@ -696,11 +696,19 @@ impl VariablePerValueDecompressor for PackedStructVariablePerValueDecompressor {
                     },
                     FieldAccumulator::Fixed { builder, .. },
                 ) => {
-                    let DataBlock::FixedWidth(block) = builder.finish() else {
-                        panic!("Expected fixed-width datablock from builder");
-                    };
-                    let decoded = decompressor.decompress(block, num_values)?;
-                    children.push(decoded);
+                    let block = builder.finish();
+                    match block {
+                        DataBlock::AllNull(all_null) => {
+                            children.push(DataBlock::AllNull(all_null));
+                        }
+                        DataBlock::FixedWidth(block) => {
+                            let decoded = decompressor.decompress(block, num_values)?;
+                            children.push(decoded);
+                        }
+                        _ => {
+                            panic!("Expected fixed-width or all-null datablock from builder");
+                        }
+                    }
                 }
                 (
                     VariablePackedStructFieldDecoder {

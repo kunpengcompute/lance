@@ -9,7 +9,16 @@ import warnings
 from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
 from . import io, log
-from .blob import Blob, BlobArray, BlobColumn, BlobFile, blob_array, blob_field
+from .blob import (
+    Blob,
+    BlobArray,
+    BlobColumn,
+    BlobFile,
+    VideoFrameBytes,
+    blob_array,
+    blob_field,
+    take_frame_by_index,
+)
 from .dataset import (
     DataStatistics,
     FieldStatistics,

@@ -68,6 +68,7 @@ use std::sync::Arc;
 use tracing::{info, instrument};
 
 pub(crate) mod blob;
+pub(crate) mod blob_video;
 pub(crate) mod branch_location;
 pub mod builder;
 pub mod cleanup;

@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright The Lance Authors
 
+import base64
 import ctypes
 import io
+import json
 from dataclasses import dataclass
 from typing import IO, Any, Iterator, Optional, Union
 
@@ -84,17 +86,21 @@ class BlobType(pa.ExtensionType):
 
     This is the "logical" type users write. Lance will store it in a compact
     descriptor format, and reads will return descriptors by default.
+    
+    The storage type includes an optional blob_info field for video GOP indexing.
     """
 
     def __init__(self, storage_type: Optional[pa.DataType] = None) -> None:
         if storage_type is None:
             storage_type = pa.struct(
                 [
-                    pa.field("data", pa.large_binary(), nullable=True),
-                    pa.field("uri", pa.utf8(), nullable=True),
+                    pa.field("kind", pa.uint8(), nullable=True),
                     pa.field("position", pa.uint64(), nullable=True),
                     pa.field("size", pa.uint64(), nullable=True),
-                    pa.field("source_id", pa.utf8(), nullable=True),
+                    pa.field("blob_id", pa.uint32(), nullable=True),
+                    pa.field("blob_uri", pa.utf8(), nullable=True),
+                    pa.field("blob_info", pa.large_binary(), nullable=True),
+                    pa.field("data", pa.large_binary(), nullable=True),
                 ]
             )
         pa.ExtensionType.__init__(self, storage_type, "lance.blob.v2")
@@ -112,8 +118,6 @@ class BlobType(pa.ExtensionType):
         return BlobArray
 
     def __reduce__(self):
-        # Workaround to ensure pickle works in earlier versions of PyArrow
-        # https://github.com/apache/arrow/issues/35599
         return type(self).__arrow_ext_deserialize__, (
             self.storage_type,
             self.__arrow_ext_serialize__(),
@@ -136,66 +140,116 @@ class BlobArray(pa.ExtensionArray):
 
     @classmethod
     def from_pylist(cls, values: list[Any]) -> "BlobArray":
-        data_values: list[Optional[bytes]] = []
-        uri_values: list[Optional[str]] = []
+        kind_values: list[Optional[int]] = []
         position_values: list[Optional[int]] = []
         size_values: list[Optional[int]] = []
-        source_id_values: list[Optional[str]] = []
+        blob_id_values: list[Optional[int]] = []
+        blob_uri_values: list[Optional[str]] = []
+        blob_info_values: list[Optional[dict]] = []
+        data_values: list[Optional[bytes]] = []
         null_mask: list[bool] = []
 
         for v in values:
             if v is None:
-                data_values.append(None)
-                uri_values.append(None)
+                kind_values.append(None)
                 position_values.append(None)
                 size_values.append(None)
-                source_id_values.append(None)
+                blob_id_values.append(None)
+                blob_uri_values.append(None)
+                blob_info_values.append(None)
+                data_values.append(None)
                 null_mask.append(True)
                 continue
 
+            if isinstance(v, dict):
+                kind_values.append(v.get("kind"))
+                position_values.append(v.get("position"))
+                size_values.append(v.get("size"))
+                blob_id_values.append(v.get("blob_id"))
+                blob_uri_values.append(v.get("blob_uri"))
+                blob_info = v.get("blob_info")
+                if blob_info is not None and isinstance(blob_info, bytes):
+                    import json as json_module
+                    blob_info = json_module.loads(blob_info)
+                blob_info_values.append(blob_info)
+                data_values.append(v.get("data"))
+                null_mask.append(False)
+                continue
+
             if isinstance(v, Blob):
-                data_values.append(v.data)
-                uri_values.append(v.uri)
-                position_values.append(v.position)
-                size_values.append(v.size)
-                source_id_values.append(v.source_id)
+                if v.data is not None:
+                    kind_values.append(0)  # Inline
+                    position_values.append(None)
+                    size_values.append(len(v.data))
+                    data_values.append(bytes(v.data))
+                elif v.uri is not None:
+                    kind_values.append(1)  # External
+                    position_values.append(v.position)
+                    size_values.append(v.size if v.size is not None else 0)
+                    data_values.append(None)
+                else:
+                    kind_values.append(None)
+                    position_values.append(None)
+                    size_values.append(None)
+                    data_values.append(None)
+                blob_id_values.append(None)
+                blob_uri_values.append(v.uri)
+                blob_info_values.append(None)
                 null_mask.append(False)
                 continue
 
             if isinstance(v, str):
                 if v == "":
                     raise ValueError("Blob uri cannot be empty")
-                data_values.append(None)
-                uri_values.append(v)
+                kind_values.append(1)  # External URI
                 position_values.append(None)
                 size_values.append(None)
-                source_id_values.append(None)
+                blob_id_values.append(None)
+                blob_uri_values.append(v)
+                blob_info_values.append(None)
+                data_values.append(None)
                 null_mask.append(False)
                 continue
 
             if isinstance(v, (bytes, bytearray, memoryview)):
-                data_values.append(bytes(v))
-                uri_values.append(None)
+                kind_values.append(0)  # Inline
                 position_values.append(None)
-                size_values.append(None)
-                source_id_values.append(None)
+                size_values.append(len(bytes(v)))
+                blob_id_values.append(None)
+                blob_uri_values.append(None)
+                blob_info_values.append(None)
+                data_values.append(bytes(v))
                 null_mask.append(False)
                 continue
 
             raise TypeError(
-                "BlobArray values must be bytes-like, str (URI), Blob, or None; "
+                "BlobArray values must be bytes-like, str (URI), Blob, dict, or None; "
                 f"got {type(v)}"
             )
 
-        data_arr = pa.array(data_values, type=pa.large_binary())
-        uri_arr = pa.array(uri_values, type=pa.utf8())
+        kind_arr = pa.array(kind_values, type=pa.uint8())
         position_arr = pa.array(position_values, type=pa.uint64())
         size_arr = pa.array(size_values, type=pa.uint64())
-        source_id_arr = pa.array(source_id_values, type=pa.utf8())
+        blob_id_arr = pa.array(blob_id_values, type=pa.uint32())
+        blob_uri_arr = pa.array(blob_uri_values, type=pa.utf8())
         mask_arr = pa.array(null_mask, type=pa.bool_())
+
+        if any(v is not None for v in blob_info_values):
+            blob_info_bytes = []
+            for bi in blob_info_values:
+                if bi is None:
+                    blob_info_bytes.append(None)
+                else:
+                    blob_info_bytes.append(json.dumps(bi).encode("utf-8"))
+            blob_info_arr = pa.array(blob_info_bytes, type=pa.large_binary())
+        else:
+            blob_info_arr = pa.nulls(len(blob_info_values), type=pa.large_binary())
+
+        data_arr = pa.array(data_values, type=pa.large_binary())
+
         storage = pa.StructArray.from_arrays(
-            [data_arr, uri_arr, position_arr, size_arr, source_id_arr],
-            names=["data", "uri", "position", "size", "source_id"],
+            [kind_arr, position_arr, size_arr, blob_id_arr, blob_uri_arr, blob_info_arr, data_arr],
+            names=["kind", "position", "size", "blob_id", "blob_uri", "blob_info", "data"],
             mask=mask_arr,
         )
         return pa.ExtensionArray.from_storage(BlobType(), storage)  # type: ignore[return-value]
@@ -372,3 +426,91 @@ class BlobFile(io.RawIOBase):
 
     def __repr__(self) -> str:
         return f"<BlobFile size={self.size()}>"
+
+
+class VideoFrameBytes:
+    """
+    Result of take_frame_by_index operation.
+
+    Attributes
+    ----------
+    bytes : bytes
+        Raw frame data bytes (encoded format, e.g., H.264 NAL units).
+    frame_index : int
+        Frame index in the video stream.
+    gop_id : int
+        GOP (Group of Pictures) ID this frame belongs to.
+    frame_type : int
+        Frame type (1=I-frame, 2=P-frame, 3=B-frame).
+    pts : int
+        Presentation timestamp in microseconds.
+    """
+
+    def __init__(
+        self,
+        bytes: bytes,
+        frame_index: int,
+        gop_id: int,
+        frame_type: int,
+        pts: int,
+    ):
+        self.bytes = bytes
+        self.frame_index = frame_index
+        self.gop_id = gop_id
+        self.frame_type = frame_type
+        self.pts = pts
+
+    def __repr__(self) -> str:
+        return (
+            f"VideoFrameBytes(frame_index={self.frame_index}, "
+            f"gop_id={self.gop_id}, frame_type={self.frame_type}, "
+            f"pts={self.pts}, size={len(self.bytes)})"
+        )
+
+
+def take_frame_by_index(
+    dataset: "Dataset",
+    column: str,
+    row_id: int,
+    frame_index: int,
+) -> VideoFrameBytes:
+    """
+    Extract a single frame from a video blob by index.
+
+    This function performs O(1) metadata lookup + 1 Range GET to extract
+    the raw frame bytes. The caller is responsible for decoding the bytes
+    (e.g., using PyAV or ffmpeg-python).
+
+    Parameters
+    ----------
+    dataset : Dataset
+        Lance dataset containing the video blob column.
+    column : str
+        Name of the video blob column.
+    row_id : int
+        Row ID (u64) of the video blob record.
+    frame_index : int
+        Zero-based index of the frame to extract.
+
+    Returns
+    -------
+    VideoFrameBytes
+        Object containing raw frame bytes and frame metadata.
+
+    Examples
+    --------
+    >>> import lance
+    >>> ds = lance.dataset("video_dataset")
+    >>> frame = take_frame_by_index(ds, "video", row_id=0, frame_index=150)
+    >>> print(f"Extracted frame {frame.frame_index}, PTS={frame.pts}")
+    """
+    from .lance import take_frame_by_index as _take_frame_by_index
+
+    result = _take_frame_by_index(dataset, column, row_id, frame_index)
+    return VideoFrameBytes(
+        bytes=result.bytes,
+        frame_index=result.frame_index,
+        gop_id=result.gop_id,
+        frame_type=result.frame_type,
+        pts=result.pts,
+    )

@@ -14,7 +14,7 @@ use arrow::array::AsArray;
 use arrow::datatypes::{UInt8Type, UInt32Type, UInt64Type};
 use arrow_array::RecordBatch;
 use arrow_array::builder::{LargeBinaryBuilder, PrimitiveBuilder, StringBuilder};
-use arrow_array::{Array, ArrayRef};
+use arrow_array::{Array, ArrayRef, LargeBinaryArray};
 use arrow_schema::{DataType as ArrowDataType, Field as ArrowField};
 use bytes::Bytes;
 use futures::future::BoxFuture;
@@ -775,6 +775,96 @@ impl BlobPreprocessor {
             .as_any()
             .downcast_ref::<StructArray>()
             .ok_or_else(|| Error::invalid_input("Blob column was not a struct array"))?;
+
+        let is_new_format = struct_arr.column_by_name("kind").is_some();
+        let has_data = struct_arr.column_by_name("data").is_some();
+        let blob_info_col = struct_arr.column_by_name("blob_info");
+
+        if is_new_format {
+            let kind_col = struct_arr
+                .column_by_name("kind")
+                .map(|col| col.as_primitive::<UInt8Type>());
+            let position_col = struct_arr
+                .column_by_name("position")
+                .map(|col| col.as_primitive::<UInt64Type>());
+            let size_col = struct_arr
+                .column_by_name("size")
+                .map(|col| col.as_primitive::<UInt64Type>());
+            let blob_id_col = struct_arr
+                .column_by_name("blob_id")
+                .map(|col| col.as_primitive::<arrow_array::types::UInt32Type>());
+            let blob_uri_col = struct_arr
+                .column_by_name("blob_uri")
+                .map(|col| col.as_string::<i32>());
+
+            let mut data_builder = LargeBinaryBuilder::with_capacity(struct_arr.len(), 0);
+            let mut uri_builder = StringBuilder::with_capacity(struct_arr.len(), 0);
+            let mut blob_id_builder =
+                PrimitiveBuilder::<arrow_array::types::UInt32Type>::with_capacity(struct_arr.len());
+            let mut blob_size_builder =
+                PrimitiveBuilder::<arrow_array::types::UInt64Type>::with_capacity(struct_arr.len());
+            let mut kind_builder = PrimitiveBuilder::<UInt8Type>::with_capacity(struct_arr.len());
+            let mut position_builder =
+                PrimitiveBuilder::<arrow_array::types::UInt64Type>::with_capacity(struct_arr.len());
+
+            let struct_nulls = struct_arr.nulls();
+
+            for i in 0..struct_arr.len() {
+                if struct_arr.is_null(i) {
+                    data_builder.append_null();
+                    uri_builder.append_null();
+                    blob_id_builder.append_null();
+                    blob_size_builder.append_null();
+                    kind_builder.append_null();
+                    position_builder.append_null();
+                    continue;
+                }
+
+                let kind_val = kind_col
+                    .as_ref()
+                    .map(|col| if col.is_null(i) { 0u8 } else { col.value(i) })
+                    .unwrap_or(0);
+                let pos_val = position_col
+                    .as_ref()
+                    .map(|col| if col.is_null(i) { 0u64 } else { col.value(i) })
+                    .unwrap_or(0);
+                let size_val = size_col
+                    .as_ref()
+                    .map(|col| if col.is_null(i) { 0u64 } else { col.value(i) })
+                    .unwrap_or(0);
+                let bid_val = blob_id_col
+                    .as_ref()
+                    .map(|col| if col.is_null(i) { 0u32 } else { col.value(i) })
+                    .unwrap_or(0);
+
+                kind_builder.append_value(kind_val);
+                position_builder.append_value(pos_val);
+                blob_size_builder.append_value(size_val);
+                blob_id_builder.append_value(bid_val);
+                data_builder.append_null();
+                uri_builder.append_null();
+            }
+
+            let row_count = struct_arr.len();
+            let blob_info_arr = blob_info_col.cloned().unwrap_or_else(|| {
+                Arc::new(LargeBinaryArray::new_null(row_count))
+            });
+            let descriptor_array = Arc::new(StructArray::try_new(
+                lance_core::datatypes::BLOB_V2_DESC_FIELDS.clone(),
+                vec![
+                    Arc::new(kind_builder.finish()),
+                    Arc::new(position_builder.finish()),
+                    Arc::new(blob_size_builder.finish()),
+                    Arc::new(blob_id_builder.finish()),
+                    Arc::new(uri_builder.finish()),
+                    blob_info_arr,
+                    Arc::new(LargeBinaryArray::new_null(row_count)),
+                ],
+                struct_nulls.cloned(),
+            )?) as ArrayRef;
+
+            return Ok((descriptor_array, Arc::new(field.clone())));
+        }
 
         let data_col = struct_arr
             .column_by_name("data")

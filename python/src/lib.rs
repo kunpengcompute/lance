@@ -62,6 +62,7 @@ use std::ffi::CString;
 use std::ptr::NonNull;
 
 pub(crate) mod arrow;
+pub(crate) mod blob_video;
 #[cfg(feature = "datagen")]
 pub(crate) mod datagen;
 pub(crate) mod dataset;
@@ -315,6 +316,7 @@ fn lance(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(bytes_read_counter))?;
     m.add_wrapped(wrap_pyfunction!(iops_counter))?;
     m.add_wrapped(wrap_pyfunction!(stable_version))?;
+    m.add_wrapped(wrap_pyfunction!(blob_video::py_take_frame_by_index))?;
     // Debug functions
     m.add_wrapped(wrap_pyfunction!(debug::format_schema))?;
     m.add_wrapped(wrap_pyfunction!(debug::format_manifest))?;

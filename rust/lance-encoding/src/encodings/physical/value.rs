@@ -738,6 +738,16 @@ impl PerValueCompressor for ValueEncoder {
                 (PerValueDataBlock::Fixed(fixed_width), encoding)
             }
             DataBlock::FixedSizeList(fixed_size_list) => Self::per_value_fsl(fixed_size_list),
+            DataBlock::AllNull(all_null) => {
+                let empty_fixed = FixedWidthDataBlock {
+                    data: LanceBuffer::empty(),
+                    bits_per_value: 0,
+                    num_values: all_null.num_values,
+                    block_info: BlockInfo::default(),
+                };
+                let encoding = ProtobufUtils21::flat(0, None);
+                (PerValueDataBlock::Fixed(empty_fixed), encoding)
+            }
             _ => unimplemented!(
                 "Cannot compress block of type {} with ValueEncoder",
                 data.name()

@@ -4,12 +4,13 @@
 use std::{collections::HashMap, sync::Arc};
 
 use arrow_array::{
-    Array, ArrayRef, StructArray, UInt64Array,
+    Array, ArrayRef, LargeBinaryArray, StructArray, UInt64Array,
     builder::{PrimitiveBuilder, StringBuilder},
     cast::AsArray,
     types::{UInt8Type, UInt32Type, UInt64Type},
 };
-use arrow_buffer::Buffer;
+use arrow_array::builder::LargeBinaryBuilder;
+use arrow_buffer::{Buffer, NullBuffer};
 use arrow_schema::{DataType, Field as ArrowField, Fields};
 use futures::{FutureExt, future::BoxFuture};
 use lance_core::{
@@ -291,9 +292,9 @@ impl FieldEncoder for BlobV2StructuralEncoder {
             })?
             .as_binary::<i64>();
         let uri_col = struct_arr
-            .column_by_name("uri")
+            .column_by_name("blob_uri")
             .ok_or_else(|| {
-                Error::invalid_input_source("Blob v2 struct missing `uri` field".into())
+                Error::invalid_input_source("Blob v2 struct missing `blob_uri` field".into())
             })?
             .as_string::<i32>();
         let blob_id_col = struct_arr
@@ -303,9 +304,9 @@ impl FieldEncoder for BlobV2StructuralEncoder {
             })?
             .as_primitive::<UInt32Type>();
         let blob_size_col = struct_arr
-            .column_by_name("blob_size")
+            .column_by_name("size")
             .ok_or_else(|| {
-                Error::invalid_input_source("Blob v2 struct missing `blob_size` field".into())
+                Error::invalid_input_source("Blob v2 struct missing `size` field".into())
             })?
             .as_primitive::<UInt64Type>();
         let packed_position_col = struct_arr
@@ -314,6 +315,7 @@ impl FieldEncoder for BlobV2StructuralEncoder {
                 Error::invalid_input_source("Blob v2 struct missing `position` field".into())
             })?
             .as_primitive::<UInt64Type>();
+        let blob_info_col = struct_arr.column_by_name("blob_info");
 
         let row_count = struct_arr.len();
 
@@ -392,12 +394,24 @@ impl FieldEncoder for BlobV2StructuralEncoder {
             blob_id_builder.append_value(blob_id_value);
             uri_builder.append_value(uri_value);
         }
+        let blob_info_array: ArrayRef = if let Some(blob_info_col) = blob_info_col {
+            blob_info_col.clone()
+        } else {
+            let mut builder = LargeBinaryBuilder::with_capacity(row_count, row_count * 64);
+            for _ in 0..row_count {
+                builder.append_null();
+            }
+            Arc::new(builder.finish())
+        };
+
         let children: Vec<ArrayRef> = vec![
             Arc::new(kind_builder.finish()),
             Arc::new(position_builder.finish()),
             Arc::new(size_builder.finish()),
             Arc::new(blob_id_builder.finish()),
             Arc::new(uri_builder.finish()),
+            blob_info_array,
+            Arc::new(LargeBinaryArray::new_null(row_count)),
         ];
 
         let descriptor_array = Arc::new(StructArray::try_new(
