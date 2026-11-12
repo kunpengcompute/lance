@@ -8,7 +8,8 @@ use crate::compression::{
     BlockCompressor, BlockDecompressor, FixedPerValueDecompressor, MiniBlockDecompressor,
 };
 use crate::data::{
-    BlockInfo, DataBlock, FixedSizeListBlock, FixedWidthDataBlock, NullableDataBlock,
+    AllNullDataBlock, BlockInfo, DataBlock, FixedSizeListBlock, FixedWidthDataBlock,
+    NullableDataBlock,
 };
 use crate::encodings::logical::primitive::fullzip::{PerValueCompressor, PerValueDataBlock};
 use crate::encodings::logical::primitive::miniblock::{
@@ -167,7 +168,7 @@ impl ValueEncoder {
         let bits_in_chunk = data.bits_per_value * num_values as u64;
         let bytes_in_chunk = bits_in_chunk.div_ceil(8);
         let bytes_in_chunk = u32::try_from(bytes_in_chunk).unwrap();
-        debug_assert!(bytes_in_chunk > 0);
+        debug_assert!(bytes_in_chunk > 0 || data.bits_per_value == 0);
         buffer_sizes.push(bytes_in_chunk);
 
         buffer_sizes
@@ -295,6 +296,16 @@ impl ValueEncoder {
                     layers.push(cur_layer);
                     return Self::chunk_fsl(inner, layers, num_rows);
                 }
+                DataBlock::AllNull(all_null) => {
+                    layers.push(cur_layer);
+                    let empty_inner = FixedWidthDataBlock {
+                        data: LanceBuffer::empty(),
+                        bits_per_value: 0,
+                        num_values: all_null.num_values,
+                        block_info: BlockInfo::default(),
+                    };
+                    return Self::chunk_fsl(empty_inner, layers, num_rows);
+                }
                 _ => unreachable!("Unexpected data block type in value encoder's miniblock_fsl"),
             }
         }
@@ -361,6 +372,17 @@ impl ValueEncoder {
                         block_info: BlockInfo::new(),
                     };
                     return (PerValueDataBlock::Fixed(data), encoding);
+                }
+                DataBlock::AllNull(_) => {
+                    return (
+                        PerValueDataBlock::Fixed(FixedWidthDataBlock {
+                            data: LanceBuffer::empty(),
+                            bits_per_value: 0,
+                            num_values,
+                            block_info: BlockInfo::new(),
+                        }),
+                        encoding,
+                    );
                 }
                 _ => unreachable!(
                     "Unexpected data block type in value encoder's simple_per_value_fsl"
@@ -555,6 +577,9 @@ impl ValueDecompressor {
     }
 
     fn buffer_to_block(&self, data: LanceBuffer, num_values: u64) -> DataBlock {
+        if self.bits_per_item == 0 {
+            return DataBlock::AllNull(AllNullDataBlock { num_values });
+        }
         DataBlock::FixedWidth(FixedWidthDataBlock {
             bits_per_value: self.bits_per_item,
             num_values,
@@ -718,6 +743,11 @@ impl ValueDecompressor {
 
 impl FixedPerValueDecompressor for ValueDecompressor {
     fn decompress(&self, data: FixedWidthDataBlock, num_rows: u64) -> Result<DataBlock> {
+        if self.bits_per_value == 0 {
+            return Ok(DataBlock::AllNull(AllNullDataBlock {
+                num_values: data.num_values,
+            }));
+        }
         if self.has_validity() {
             Ok(self.unzip_decompress(data, num_rows as usize))
         } else {

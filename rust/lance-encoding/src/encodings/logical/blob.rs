@@ -3,14 +3,14 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+use arrow_array::builder::LargeBinaryBuilder;
 use arrow_array::{
     Array, ArrayRef, LargeBinaryArray, StructArray, UInt64Array,
     builder::{PrimitiveBuilder, StringBuilder},
     cast::AsArray,
     types::{UInt8Type, UInt32Type, UInt64Type},
 };
-use arrow_array::builder::LargeBinaryBuilder;
-use arrow_buffer::{Buffer, NullBuffer};
+use arrow_buffer::Buffer;
 use arrow_schema::{DataType, Field as ArrowField, Fields};
 use futures::{FutureExt, future::BoxFuture};
 use lance_core::{
@@ -558,9 +558,9 @@ mod tests {
 
         let kind_field = Arc::new(ArrowField::new("kind", DataType::UInt8, true));
         let data_field = Arc::new(ArrowField::new("data", DataType::LargeBinary, true));
-        let uri_field = Arc::new(ArrowField::new("uri", DataType::Utf8, true));
+        let uri_field = Arc::new(ArrowField::new("blob_uri", DataType::Utf8, true));
         let blob_id_field = Arc::new(ArrowField::new("blob_id", DataType::UInt32, true));
-        let blob_size_field = Arc::new(ArrowField::new("blob_size", DataType::UInt64, true));
+        let blob_size_field = Arc::new(ArrowField::new("size", DataType::UInt64, true));
         let position_field = Arc::new(ArrowField::new("position", DataType::UInt64, true));
 
         let kind_array = UInt8Array::from(vec![
@@ -616,6 +616,14 @@ mod tests {
                     "s3://bucket/blob",
                 ])) as ArrayRef,
             ),
+            (
+                Arc::new(ArrowField::new("blob_info", DataType::LargeBinary, true)),
+                Arc::new(LargeBinaryArray::new_null(3)) as ArrayRef,
+            ),
+            (
+                Arc::new(ArrowField::new("data", DataType::LargeBinary, true)),
+                Arc::new(LargeBinaryArray::new_null(3)) as ArrayRef,
+            ),
         ]);
 
         check_round_trip_encoding_of_data_with_expected(
@@ -636,9 +644,9 @@ mod tests {
 
         let kind_field = Arc::new(ArrowField::new("kind", DataType::UInt8, true));
         let data_field = Arc::new(ArrowField::new("data", DataType::LargeBinary, true));
-        let uri_field = Arc::new(ArrowField::new("uri", DataType::Utf8, true));
+        let uri_field = Arc::new(ArrowField::new("blob_uri", DataType::Utf8, true));
         let blob_id_field = Arc::new(ArrowField::new("blob_id", DataType::UInt32, true));
-        let blob_size_field = Arc::new(ArrowField::new("blob_size", DataType::UInt64, true));
+        let blob_size_field = Arc::new(ArrowField::new("size", DataType::UInt64, true));
         let position_field = Arc::new(ArrowField::new("position", DataType::UInt64, true));
 
         let kind_array = UInt8Array::from(vec![BlobKind::Dedicated as u8, BlobKind::Inline as u8]);
@@ -681,6 +689,14 @@ mod tests {
                 Arc::new(ArrowField::new("blob_uri", DataType::Utf8, false)),
                 Arc::new(StringArray::from(vec!["", ""])) as ArrayRef,
             ),
+            (
+                Arc::new(ArrowField::new("blob_info", DataType::LargeBinary, true)),
+                Arc::new(LargeBinaryArray::new_null(2)) as ArrayRef,
+            ),
+            (
+                Arc::new(ArrowField::new("data", DataType::LargeBinary, true)),
+                Arc::new(LargeBinaryArray::new_null(2)) as ArrayRef,
+            ),
         ]);
 
         check_round_trip_encoding_of_data_with_expected(
@@ -701,9 +717,9 @@ mod tests {
 
         let kind_field = Arc::new(ArrowField::new("kind", DataType::UInt8, true));
         let data_field = Arc::new(ArrowField::new("data", DataType::LargeBinary, true));
-        let uri_field = Arc::new(ArrowField::new("uri", DataType::Utf8, true));
+        let uri_field = Arc::new(ArrowField::new("blob_uri", DataType::Utf8, true));
         let blob_id_field = Arc::new(ArrowField::new("blob_id", DataType::UInt32, true));
-        let blob_size_field = Arc::new(ArrowField::new("blob_size", DataType::UInt64, true));
+        let blob_size_field = Arc::new(ArrowField::new("size", DataType::UInt64, true));
         let position_field = Arc::new(ArrowField::new("position", DataType::UInt64, true));
 
         let kind_array = UInt8Array::from(vec![BlobKind::External as u8]);
@@ -743,6 +759,14 @@ mod tests {
                 Arc::new(ArrowField::new("blob_uri", DataType::Utf8, false)),
                 Arc::new(StringArray::from(vec!["memory://container.pack"])) as ArrayRef,
             ),
+            (
+                Arc::new(ArrowField::new("blob_info", DataType::LargeBinary, true)),
+                Arc::new(LargeBinaryArray::new_null(1)) as ArrayRef,
+            ),
+            (
+                Arc::new(ArrowField::new("data", DataType::LargeBinary, true)),
+                Arc::new(LargeBinaryArray::new_null(1)) as ArrayRef,
+            ),
         ]);
 
         check_round_trip_encoding_of_data_with_expected(
@@ -763,9 +787,9 @@ mod tests {
 
         let kind_field = Arc::new(ArrowField::new("kind", DataType::UInt8, true));
         let data_field = Arc::new(ArrowField::new("data", DataType::LargeBinary, true));
-        let uri_field = Arc::new(ArrowField::new("uri", DataType::Utf8, true));
+        let uri_field = Arc::new(ArrowField::new("blob_uri", DataType::Utf8, true));
         let blob_id_field = Arc::new(ArrowField::new("blob_id", DataType::UInt32, true));
-        let blob_size_field = Arc::new(ArrowField::new("blob_size", DataType::UInt64, true));
+        let blob_size_field = Arc::new(ArrowField::new("size", DataType::UInt64, true));
         let position_field = Arc::new(ArrowField::new("position", DataType::UInt64, true));
 
         let kind_array = UInt8Array::from(vec![BlobKind::Packed as u8]);
@@ -804,6 +828,14 @@ mod tests {
             (
                 Arc::new(ArrowField::new("blob_uri", DataType::Utf8, false)),
                 Arc::new(StringArray::from(vec![""])) as ArrayRef,
+            ),
+            (
+                Arc::new(ArrowField::new("blob_info", DataType::LargeBinary, true)),
+                Arc::new(LargeBinaryArray::new_null(1)) as ArrayRef,
+            ),
+            (
+                Arc::new(ArrowField::new("data", DataType::LargeBinary, true)),
+                Arc::new(LargeBinaryArray::new_null(1)) as ArrayRef,
             ),
         ]);
 

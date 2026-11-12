@@ -10,21 +10,21 @@ These tests verify:
 3. Frame metadata (pts, frame_type) is correctly extracted
 """
 
+import json
 import os
-import tempfile
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
-import numpy as np
+import lance
 import pyarrow as pa
 import pytest
+from lance.blob import BlobType, VideoFrameBytes, take_frame_by_index
 
-import lance
-from lance.blob import take_frame_by_index, BlobType, VideoFrameBytes
-
-
-TEST_VIDEO_URL = "https://storage.googleapis.com/lance-artifacts/test-data/sample_video.mp4"
+TEST_VIDEO_URL = (
+    "https://storage.googleapis.com/lance-artifacts/test-data/sample_video.mp4"
+)
 TEST_VIDEO_PATH = Path(__file__).parent.parent.parent / "test_data" / "sample_video.mp4"
 
 
@@ -37,6 +37,7 @@ def test_video():
     print(f"Downloading test video from {TEST_VIDEO_URL}...")
     try:
         import urllib.request
+
         TEST_VIDEO_PATH.parent.mkdir(parents=True, exist_ok=True)
         urllib.request.urlretrieve(TEST_VIDEO_URL, str(TEST_VIDEO_PATH))
         return str(TEST_VIDEO_PATH)
@@ -53,7 +54,9 @@ def temp_dir():
 
 def run_prepare_video(input_video: str, output_dir: str) -> dict:
     """Run the prepare_video_demo.py script."""
-    script_path = Path(__file__).parent.parent.parent / "tools" / "prepare_video_demo.py"
+    script_path = (
+        Path(__file__).parent.parent.parent / "tools" / "prepare_video_demo.py"
+    )
     result = subprocess.run(
         [sys.executable, str(script_path), input_video, output_dir, "-v"],
         capture_output=True,
@@ -61,7 +64,7 @@ def run_prepare_video(input_video: str, output_dir: str) -> dict:
     )
     if result.returncode != 0:
         raise RuntimeError(f"prepare_video_demo.py failed: {result.stderr}")
-    import json
+
     return json.loads(result.stdout)
 
 
@@ -79,10 +82,11 @@ def test_prepare_video_demo(test_video, temp_dir):
     assert result["stats"]["num_frames"] > 0, "Should have at least one frame"
 
     descriptor = result["descriptor"]
-    assert descriptor["kind"] == 1, "Kind should be 1 (Packed)"
-    assert descriptor["blob_info"]["blob_type"] == 1, "Blob type should be 1 (video)"
-    assert "gops" in descriptor["blob_info"]["entries"]
-    assert "frames" in descriptor["blob_info"]["entries"]
+    assert descriptor["kind"] == 3, "Kind should be 3 (External)"
+    blob_info = json.loads(descriptor["blob_info"])
+    assert blob_info["blob_type"] == 1, "Blob type should be 1 (video)"
+    assert "gops" in blob_info["entries"]
+    assert "frames" in blob_info["entries"]
 
 
 def test_write_dataset_with_blob_info(test_video, temp_dir):
@@ -92,15 +96,20 @@ def test_write_dataset_with_blob_info(test_video, temp_dir):
 
     blob_type = get_blob_v2_ext_type()
 
-    schema = pa.schema([
-        pa.field("id", pa.int32(), False),
-        pa.field("video", blob_type),
-    ])
+    schema = pa.schema(
+        [
+            pa.field("id", pa.int32(), False),
+            pa.field("video", blob_type),
+        ]
+    )
 
-    table = pa.table({
-        "id": [1],
-        "video": [descriptor],
-    })
+    table = pa.table(
+        {
+            "id": [1],
+            "video": [descriptor],
+        },
+        schema=schema,
+    )
 
     dataset_path = os.path.join(temp_dir, "video_dataset")
     lance.write_dataset(table, dataset_path, schema=schema)
@@ -117,15 +126,20 @@ def test_take_frame_by_index(test_video, temp_dir):
 
     blob_type = get_blob_v2_ext_type()
 
-    schema = pa.schema([
-        pa.field("id", pa.int32(), False),
-        pa.field("video", blob_type),
-    ])
+    schema = pa.schema(
+        [
+            pa.field("id", pa.int32(), False),
+            pa.field("video", blob_type),
+        ]
+    )
 
-    table = pa.table({
-        "id": [1],
-        "video": [descriptor],
-    })
+    table = pa.table(
+        {
+            "id": [1],
+            "video": [descriptor],
+        },
+        schema=schema,
+    )
 
     dataset_path = os.path.join(temp_dir, "video_dataset")
     lance.write_dataset(table, dataset_path, schema=schema)
@@ -148,15 +162,20 @@ def test_take_frame_by_index_i_frame(test_video, temp_dir):
 
     blob_type = get_blob_v2_ext_type()
 
-    schema = pa.schema([
-        pa.field("id", pa.int32(), False),
-        pa.field("video", blob_type),
-    ])
+    schema = pa.schema(
+        [
+            pa.field("id", pa.int32(), False),
+            pa.field("video", blob_type),
+        ]
+    )
 
-    table = pa.table({
-        "id": [1],
-        "video": [descriptor],
-    })
+    table = pa.table(
+        {
+            "id": [1],
+            "video": [descriptor],
+        },
+        schema=schema,
+    )
 
     dataset_path = os.path.join(temp_dir, "video_dataset")
     lance.write_dataset(table, dataset_path, schema=schema)
@@ -175,15 +194,20 @@ def test_metadata_correctness(test_video, temp_dir):
 
     blob_type = get_blob_v2_ext_type()
 
-    schema = pa.schema([
-        pa.field("id", pa.int32(), False),
-        pa.field("video", blob_type),
-    ])
+    schema = pa.schema(
+        [
+            pa.field("id", pa.int32(), False),
+            pa.field("video", blob_type),
+        ]
+    )
 
-    table = pa.table({
-        "id": [1],
-        "video": [descriptor],
-    })
+    table = pa.table(
+        {
+            "id": [1],
+            "video": [descriptor],
+        },
+        schema=schema,
+    )
 
     dataset_path = os.path.join(temp_dir, "video_dataset")
     lance.write_dataset(table, dataset_path, schema=schema)
@@ -193,7 +217,8 @@ def test_metadata_correctness(test_video, temp_dir):
     frame_idx = 10
     frame = take_frame_by_index(ds, "video", row_id=0, frame_index=frame_idx)
 
-    expected_frame = descriptor["blob_info"]["entries"]["frames"][frame_idx]
+    blob_info = json.loads(descriptor["blob_info"])
+    expected_frame = blob_info["entries"]["frames"][frame_idx]
 
     assert frame.frame_index == frame_idx
     assert frame.gop_id == expected_frame["gop_id"]

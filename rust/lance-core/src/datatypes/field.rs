@@ -1877,7 +1877,7 @@ mod tests {
         .try_into()
         .unwrap();
         field.unloaded_mut();
-        assert_eq!(field.children.len(), 6);
+        assert_eq!(field.children.len(), 7);
         assert_eq!(field.logical_type, BLOB_V2_DESC_LANCE_FIELD.logical_type);
     }
 
@@ -1926,7 +1926,7 @@ mod tests {
 
         let blob_v2 = field.children.iter().find(|f| f.name == "blob_v2").unwrap();
         assert_eq!(blob_v2.logical_type, BLOB_V2_DESC_LANCE_FIELD.logical_type);
-        assert_eq!(blob_v2.children.len(), 6);
+        assert_eq!(blob_v2.children.len(), 7);
     }
 
     #[test]

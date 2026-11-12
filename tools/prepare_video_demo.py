@@ -19,7 +19,6 @@ Output:
 import argparse
 import base64
 import json
-import struct
 import sys
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -86,7 +85,9 @@ def extract_stream_info(stream: av.stream.Stream) -> StreamInfo:
     if stream.duration is not None:
         duration_us = int(stream.duration * 1_000_000 / stream.time_base.denominator)
     elif stream.container.duration is not None:
-        duration_us = int(stream.container.duration * 1_000_000 / stream.container.duration_time_base)
+        duration_us = int(
+            stream.container.duration * 1_000_000 / stream.container.duration_time_base
+        )
 
     extradata = None
     if codec_ctx.extradata is not None:
@@ -141,12 +142,14 @@ def prepare_video(input_mp4: str, output_blob_path: str) -> Tuple[BlobInfo, int]
 
             if packet.is_keyframe:
                 if current_gop_id >= 0 and frame_idx > 0:
-                    gops.append(GopInfo(
-                        byte_offset=current_gop_start_offset,
-                        byte_length=f.tell() - current_gop_start_offset,
-                        frame_count=current_gop_frame_count,
-                        first_frame_idx=current_gop_first_frame_idx,
-                    ))
+                    gops.append(
+                        GopInfo(
+                            byte_offset=current_gop_start_offset,
+                            byte_length=f.tell() - current_gop_start_offset,
+                            frame_count=current_gop_frame_count,
+                            first_frame_idx=current_gop_first_frame_idx,
+                        )
+                    )
                     current_gop_first_frame_idx = frame_idx
                     current_gop_start_offset = f.tell()
                     current_gop_frame_count = 0
@@ -157,7 +160,7 @@ def prepare_video(input_mp4: str, output_blob_path: str) -> Tuple[BlobInfo, int]
             f.write(packet_bytes)
             frame_length = len(packet_bytes)
 
-            pict_type = getattr(packet, 'pict_type', None)
+            pict_type = getattr(packet, "pict_type", None)
             if pict_type is None:
                 frame_type = FRAME_TYPE_P
             elif pict_type.value == 1:  # I frame
@@ -169,13 +172,17 @@ def prepare_video(input_mp4: str, output_blob_path: str) -> Tuple[BlobInfo, int]
             else:
                 frame_type = FRAME_TYPE_P
 
-            frames.append(FrameInfo(
-                byte_offset=frame_offset,
-                byte_length=frame_length,
-                frame_type=frame_type,
-                gop_id=current_gop_id,
-                pts=int(packet.pts * 1_000_000 / packet.time_base.denominator) if packet.pts else 0,
-            ))
+            frames.append(
+                FrameInfo(
+                    byte_offset=frame_offset,
+                    byte_length=frame_length,
+                    frame_type=frame_type,
+                    gop_id=current_gop_id,
+                    pts=int(packet.pts * 1_000_000 / packet.time_base.denominator)
+                    if packet.pts
+                    else 0,
+                )
+            )
 
             frame_idx += 1
             current_gop_frame_count += 1
@@ -183,12 +190,14 @@ def prepare_video(input_mp4: str, output_blob_path: str) -> Tuple[BlobInfo, int]
         total_size = f.tell()
 
         if current_gop_id >= 0:
-            gops.append(GopInfo(
-                byte_offset=current_gop_start_offset,
-                byte_length=total_size - current_gop_start_offset,
-                frame_count=current_gop_frame_count,
-                first_frame_idx=current_gop_first_frame_idx,
-            ))
+            gops.append(
+                GopInfo(
+                    byte_offset=current_gop_start_offset,
+                    byte_length=total_size - current_gop_start_offset,
+                    frame_count=current_gop_frame_count,
+                    first_frame_idx=current_gop_first_frame_idx,
+                )
+            )
 
     blob_info = BlobInfo(
         blob_type=1,
@@ -213,39 +222,44 @@ def build_blob_descriptor(
     Parameters
     ----------
     blob_uri : str
-        URI to the .blob file.
+        Absolute external URI to the .blob file (e.g. file:///...).
     position : int
         Byte offset in the blob file (usually 0 for single video).
     size : int
         Total size of the video in bytes.
     blob_id : int
-        Blob ID for deduplication.
+        Blob ID. Must be 0 when blob_uri is an absolute external URI.
     blob_info : BlobInfo
         Video GOP indexing metadata.
 
     Returns
     -------
     Dict
-        Arrow Struct-compatible dict with blob_info.
+        BlobDescriptorV2 dict whose blob_info is UTF-8 encoded JSON bytes,
+        matching the large_binary storage contract on the Rust side.
     """
     gop_structs = []
     for gop in blob_info.gops:
-        gop_structs.append({
-            "byte_offset": gop.byte_offset,
-            "byte_length": gop.byte_length,
-            "frame_count": gop.frame_count,
-            "first_frame_idx": gop.first_frame_idx,
-        })
+        gop_structs.append(
+            {
+                "byte_offset": gop.byte_offset,
+                "byte_length": gop.byte_length,
+                "frame_count": gop.frame_count,
+                "first_frame_idx": gop.first_frame_idx,
+            }
+        )
 
     frame_structs = []
     for frame in blob_info.frames:
-        frame_structs.append({
-            "byte_offset": frame.byte_offset,
-            "byte_length": frame.byte_length,
-            "frame_type": frame.frame_type,
-            "gop_id": frame.gop_id,
-            "pts": frame.pts,
-        })
+        frame_structs.append(
+            {
+                "byte_offset": frame.byte_offset,
+                "byte_length": frame.byte_length,
+                "frame_type": frame.frame_type,
+                "gop_id": frame.gop_id,
+                "pts": frame.pts,
+            }
+        )
 
     stream_info_dict = {
         "codec": blob_info.stream_info.codec,
@@ -254,7 +268,9 @@ def build_blob_descriptor(
         "duration_us": blob_info.stream_info.duration_us,
         "width": blob_info.stream_info.width,
         "height": blob_info.stream_info.height,
-        "extradata": base64.b64encode(blob_info.stream_info.extradata).decode() if blob_info.stream_info.extradata else None,
+        "extradata": base64.b64encode(blob_info.stream_info.extradata).decode()
+        if blob_info.stream_info.extradata
+        else None,
     }
 
     entries_dict = {
@@ -269,51 +285,27 @@ def build_blob_descriptor(
     }
 
     return {
-        "kind": 1,
+        "kind": 3,  # External: not stored by Lance data files
         "position": position,
         "size": size,
         "blob_id": blob_id,
         "blob_uri": blob_uri,
-        "blob_info": blob_info_dict,
+        "blob_info": json.dumps(blob_info_dict).encode("utf-8"),
     }
 
 
 def get_blob_v2_schema() -> pa.Schema:
-    """Get Arrow schema for BlobDescriptorV2 with blob_info."""
-    return pa.schema([
-        pa.field("kind", pa.uint8(), False),
-        pa.field("position", pa.uint64(), False),
-        pa.field("size", pa.uint64(), False),
-        pa.field("blob_id", pa.uint32(), False),
-        pa.field("blob_uri", pa.utf8(), False),
-        pa.field("blob_info", pa.struct([
-            pa.field("blob_type", pa.uint8(), False),
-            pa.field("stream_info", pa.struct([
-                pa.field("codec", pa.utf8(), False),
-                pa.field("fps_num", pa.uint32(), False),
-                pa.field("fps_den", pa.uint32(), False),
-                pa.field("duration_us", pa.uint64(), True),
-                pa.field("width", pa.uint32(), True),
-                pa.field("height", pa.uint32(), True),
-                pa.field("extradata", pa.large_binary(), True),
-            ]), True),
-            pa.field("entries", pa.struct([
-                pa.field("gops", pa.list_(pa.struct([
-                    pa.field("byte_offset", pa.uint64(), False),
-                    pa.field("byte_length", pa.uint32(), False),
-                    pa.field("frame_count", pa.uint32(), False),
-                    pa.field("first_frame_idx", pa.uint32(), False),
-                ])), False),
-                pa.field("frames", pa.list_(pa.struct([
-                    pa.field("byte_offset", pa.uint64(), False),
-                    pa.field("byte_length", pa.uint32(), False),
-                    pa.field("frame_type", pa.uint8(), False),
-                    pa.field("gop_id", pa.uint32(), False),
-                    pa.field("pts", pa.uint64(), False),
-                ])), False),
-            ]), True),
-        ]), True),
-    ])
+    """Get Arrow schema for BlobDescriptorV2 with blob_info (JSON bytes)."""
+    return pa.schema(
+        [
+            pa.field("kind", pa.uint8(), False),
+            pa.field("position", pa.uint64(), False),
+            pa.field("size", pa.uint64(), False),
+            pa.field("blob_id", pa.uint32(), False),
+            pa.field("blob_uri", pa.utf8(), False),
+            pa.field("blob_info", pa.large_binary(), True),
+        ]
+    )
 
 
 def main():
@@ -322,21 +314,22 @@ def main():
     )
     parser.add_argument("input", help="Input MP4 file")
     parser.add_argument("output_dir", help="Output directory for .blob file")
-    parser.add_argument("--blob-id", type=int, default=100, help="Blob ID (default: 100)")
+    parser.add_argument("--blob-id", type=int, default=0, help="Blob ID (default: 0)")
     parser.add_argument("--row-id", type=int, default=0, help="Row ID (default: 0)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
 
     args = parser.parse_args()
 
     import os
+
     os.makedirs(args.output_dir, exist_ok=True)
 
     blob_path = os.path.join(args.output_dir, "video.blob")
     blob_uri = f"file:///{blob_path.replace(os.sep, '/')}"
 
     if args.verbose:
-        print(f"Processing: {args.input}")
-        print(f"Output blob: {blob_path}")
+        print(f"Processing: {args.input}", file=sys.stderr)
+        print(f"Output blob: {blob_path}", file=sys.stderr)
 
     blob_info, total_size = prepare_video(args.input, blob_path)
 
@@ -349,12 +342,18 @@ def main():
     )
 
     if args.verbose:
-        print(f"Total GOPs: {len(blob_info.gops)}")
-        print(f"Total frames: {len(blob_info.frames)}")
-        print(f"Total size: {total_size} bytes")
-        print(f"Codec: {blob_info.stream_info.codec}")
-        print(f"Resolution: {blob_info.stream_info.width}x{blob_info.stream_info.height}")
-        print(f"FPS: {blob_info.stream_info.fps_num}/{blob_info.stream_info.fps_den}")
+        print(f"Total GOPs: {len(blob_info.gops)}", file=sys.stderr)
+        print(f"Total frames: {len(blob_info.frames)}", file=sys.stderr)
+        print(f"Total size: {total_size} bytes", file=sys.stderr)
+        print(f"Codec: {blob_info.stream_info.codec}", file=sys.stderr)
+        print(
+            f"Resolution: {blob_info.stream_info.width}x{blob_info.stream_info.height}",
+            file=sys.stderr,
+        )
+        print(
+            f"FPS: {blob_info.stream_info.fps_num}/{blob_info.stream_info.fps_den}",
+            file=sys.stderr,
+        )
 
     result = {
         "descriptor": descriptor,
@@ -367,7 +366,7 @@ def main():
             "codec": blob_info.stream_info.codec,
             "fps": f"{blob_info.stream_info.fps_num}/{blob_info.stream_info.fps_den}",
             "resolution": f"{blob_info.stream_info.width}x{blob_info.stream_info.height}",
-        }
+        },
     }
 
     print(json.dumps(result, indent=2))

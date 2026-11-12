@@ -934,12 +934,14 @@ mod test {
         let values = dataset.take(&[0u64], proj).await.unwrap();
 
         let struct_arr = values.column(0).as_struct();
-        assert_eq!(struct_arr.fields().len(), 5);
+        assert_eq!(struct_arr.fields().len(), 7);
         assert_eq!(struct_arr.fields()[0].name(), "kind");
         assert_eq!(struct_arr.fields()[1].name(), "position");
         assert_eq!(struct_arr.fields()[2].name(), "size");
         assert_eq!(struct_arr.fields()[3].name(), "blob_id");
         assert_eq!(struct_arr.fields()[4].name(), "blob_uri");
+        assert_eq!(struct_arr.fields()[5].name(), "blob_info");
+        assert_eq!(struct_arr.fields()[6].name(), "data");
     }
 
     #[tokio::test]

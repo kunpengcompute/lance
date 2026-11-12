@@ -50,92 +50,15 @@ pub static BLOB_DESC_LANCE_FIELD: LazyLock<Field> =
 
 pub static BLOB_V2_DESC_FIELDS: LazyLock<Fields> = LazyLock::new(|| {
     Fields::from(vec![
-        ArrowField::new("kind", DataType::UInt8, true),
-        ArrowField::new("position", DataType::UInt64, true),
-        ArrowField::new("size", DataType::UInt64, true),
-        ArrowField::new("blob_id", DataType::UInt32, true),
-        ArrowField::new("blob_uri", DataType::Utf8, true),
+        ArrowField::new("kind", DataType::UInt8, false),
+        ArrowField::new("position", DataType::UInt64, false),
+        ArrowField::new("size", DataType::UInt64, false),
+        ArrowField::new("blob_id", DataType::UInt32, false),
+        ArrowField::new("blob_uri", DataType::Utf8, false),
         ArrowField::new("blob_info", DataType::LargeBinary, true),
         ArrowField::new("data", DataType::LargeBinary, true),
     ])
 });
-
-pub static FRAME_ENTRY_FIELDS: LazyLock<Fields> = LazyLock::new(|| {
-    Fields::from(vec![
-        ArrowField::new("byte_offset", DataType::UInt64, false),
-        ArrowField::new("byte_length", DataType::UInt32, false),
-        ArrowField::new("frame_type", DataType::UInt8, false),
-        ArrowField::new("gop_id", DataType::UInt32, false),
-        ArrowField::new("pts", DataType::UInt64, false),
-    ])
-});
-
-pub static GOP_ENTRY_FIELDS: LazyLock<Fields> = LazyLock::new(|| {
-    Fields::from(vec![
-        ArrowField::new("byte_offset", DataType::UInt64, false),
-        ArrowField::new("byte_length", DataType::UInt32, false),
-        ArrowField::new("frame_count", DataType::UInt32, false),
-        ArrowField::new("first_frame_idx", DataType::UInt32, false),
-    ])
-});
-
-pub static ENTRIES_FIELDS: LazyLock<Fields> = LazyLock::new(|| {
-    Fields::from(vec![
-        ArrowField::new(
-            "gops",
-            DataType::List(Arc::new(ArrowField::new(
-                "item",
-                GOP_ENTRY_TYPE.clone(),
-                true,
-            ))),
-            false,
-        ),
-        ArrowField::new(
-            "frames",
-            DataType::List(Arc::new(ArrowField::new(
-                "item",
-                FRAME_ENTRY_TYPE.clone(),
-                true,
-            ))),
-            false,
-        ),
-    ])
-});
-
-pub static STREAM_INFO_FIELDS: LazyLock<Fields> = LazyLock::new(|| {
-    Fields::from(vec![
-        ArrowField::new("codec", DataType::Utf8, false),
-        ArrowField::new("fps_num", DataType::UInt32, false),
-        ArrowField::new("fps_den", DataType::UInt32, false),
-        ArrowField::new("duration_us", DataType::UInt64, true),
-        ArrowField::new("width", DataType::UInt32, true),
-        ArrowField::new("height", DataType::UInt32, true),
-        ArrowField::new("extradata", DataType::LargeBinary, true),
-    ])
-});
-
-pub static BLOB_INFO_FIELDS: LazyLock<Fields> = LazyLock::new(|| {
-    Fields::from(vec![
-        ArrowField::new("blob_type", DataType::UInt8, false),
-        ArrowField::new("stream_info", STREAM_INFO_TYPE.clone(), true),
-        ArrowField::new("entries", ENTRIES_TYPE.clone(), true),
-    ])
-});
-
-pub static FRAME_ENTRY_TYPE: LazyLock<DataType> =
-    LazyLock::new(|| DataType::Struct(FRAME_ENTRY_FIELDS.clone()));
-
-pub static GOP_ENTRY_TYPE: LazyLock<DataType> =
-    LazyLock::new(|| DataType::Struct(GOP_ENTRY_FIELDS.clone()));
-
-pub static ENTRIES_TYPE: LazyLock<DataType> =
-    LazyLock::new(|| DataType::Struct(ENTRIES_FIELDS.clone()));
-
-pub static STREAM_INFO_TYPE: LazyLock<DataType> =
-    LazyLock::new(|| DataType::Struct(STREAM_INFO_FIELDS.clone()));
-
-pub static BLOB_INFO_TYPE: LazyLock<DataType> =
-    LazyLock::new(|| DataType::Struct(BLOB_INFO_FIELDS.clone()));
 
 pub static BLOB_V2_DESC_TYPE: LazyLock<DataType> =
     LazyLock::new(|| DataType::Struct(BLOB_V2_DESC_FIELDS.clone()));

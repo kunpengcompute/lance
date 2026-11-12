@@ -1,16 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright The Lance Authors
 
-import base64
 import ctypes
 import io
 import json
 from dataclasses import dataclass
-from typing import IO, Any, Iterator, Optional, Union
+from typing import IO, TYPE_CHECKING, Any, Iterator, Optional, Union
 
 import pyarrow as pa
 
 from .lance import LanceBlobFile
+
+if TYPE_CHECKING:
+    from .dataset import LanceDataset as Dataset
 
 _BLOB_INLINE_SIZE_THRESHOLD_META_KEY = b"lance-encoding:blob-inline-size-threshold"
 _BLOB_DEDICATED_SIZE_THRESHOLD_META_KEY = (
@@ -86,7 +88,7 @@ class BlobType(pa.ExtensionType):
 
     This is the "logical" type users write. Lance will store it in a compact
     descriptor format, and reads will return descriptors by default.
-    
+
     The storage type includes an optional blob_info field for video GOP indexing.
     """
 
@@ -94,11 +96,11 @@ class BlobType(pa.ExtensionType):
         if storage_type is None:
             storage_type = pa.struct(
                 [
-                    pa.field("kind", pa.uint8(), nullable=True),
-                    pa.field("position", pa.uint64(), nullable=True),
-                    pa.field("size", pa.uint64(), nullable=True),
-                    pa.field("blob_id", pa.uint32(), nullable=True),
-                    pa.field("blob_uri", pa.utf8(), nullable=True),
+                    pa.field("kind", pa.uint8(), nullable=False),
+                    pa.field("position", pa.uint64(), nullable=False),
+                    pa.field("size", pa.uint64(), nullable=False),
+                    pa.field("blob_id", pa.uint32(), nullable=False),
+                    pa.field("blob_uri", pa.utf8(), nullable=False),
                     pa.field("blob_info", pa.large_binary(), nullable=True),
                     pa.field("data", pa.large_binary(), nullable=True),
                 ]
@@ -162,17 +164,32 @@ class BlobArray(pa.ExtensionArray):
                 continue
 
             if isinstance(v, dict):
-                kind_values.append(v.get("kind"))
+                kind = v.get("kind")
+                data = v.get("data")
+                uri = v.get("blob_uri")
+                if kind is None:
+                    # Infer kind from the payload when the caller omits it so
+                    # that inline/external data is not silently dropped.
+                    if data is not None:
+                        kind = 0  # Inline
+                    elif uri is not None:
+                        kind = 3  # External
+                    else:
+                        raise ValueError(
+                            "dict blob descriptor has neither kind, data, nor blob_uri"
+                        )
+                kind_values.append(kind)
                 position_values.append(v.get("position"))
                 size_values.append(v.get("size"))
                 blob_id_values.append(v.get("blob_id"))
-                blob_uri_values.append(v.get("blob_uri"))
+                blob_uri_values.append(uri)
                 blob_info = v.get("blob_info")
-                if blob_info is not None and isinstance(blob_info, bytes):
+                if isinstance(blob_info, (bytes, str)):
                     import json as json_module
+
                     blob_info = json_module.loads(blob_info)
                 blob_info_values.append(blob_info)
-                data_values.append(v.get("data"))
+                data_values.append(data)
                 null_mask.append(False)
                 continue
 
@@ -183,7 +200,7 @@ class BlobArray(pa.ExtensionArray):
                     size_values.append(len(v.data))
                     data_values.append(bytes(v.data))
                 elif v.uri is not None:
-                    kind_values.append(1)  # External
+                    kind_values.append(3)  # External
                     position_values.append(v.position)
                     size_values.append(v.size if v.size is not None else 0)
                     data_values.append(None)
@@ -201,7 +218,7 @@ class BlobArray(pa.ExtensionArray):
             if isinstance(v, str):
                 if v == "":
                     raise ValueError("Blob uri cannot be empty")
-                kind_values.append(1)  # External URI
+                kind_values.append(3)  # External URI
                 position_values.append(None)
                 size_values.append(None)
                 blob_id_values.append(None)
@@ -248,8 +265,24 @@ class BlobArray(pa.ExtensionArray):
         data_arr = pa.array(data_values, type=pa.large_binary())
 
         storage = pa.StructArray.from_arrays(
-            [kind_arr, position_arr, size_arr, blob_id_arr, blob_uri_arr, blob_info_arr, data_arr],
-            names=["kind", "position", "size", "blob_id", "blob_uri", "blob_info", "data"],
+            [
+                kind_arr,
+                position_arr,
+                size_arr,
+                blob_id_arr,
+                blob_uri_arr,
+                blob_info_arr,
+                data_arr,
+            ],
+            names=[
+                "kind",
+                "position",
+                "size",
+                "blob_id",
+                "blob_uri",
+                "blob_info",
+                "data",
+            ],
             mask=mask_arr,
         )
         return pa.ExtensionArray.from_storage(BlobType(), storage)  # type: ignore[return-value]

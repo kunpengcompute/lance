@@ -1,4 +1,4 @@
-锘?/ SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Lance Authors
 
 use std::borrow::Borrow;
@@ -6,10 +6,10 @@ use std::borrow::Borrow;
 use pyo3::prelude::*;
 use pyo3::pybacked::PyBackedStr;
 
-use lance::take_frame_by_index as take_frame_by_index_impl;
 use lance::VideoFrameBytes as LanceVideoFrameBytes;
+use lance::take_frame_by_index as take_frame_by_index_impl;
 
-use crate::{rt, Dataset as PyDataset};
+use crate::{Dataset as PyDataset, rt};
 
 #[pyclass(name = "VideoFrameBytes")]
 pub struct PyVideoFrameBytes {
@@ -74,9 +74,11 @@ pub fn py_take_frame_by_index(
     let result = rt.block_on(Some(py), async {
         take_frame_by_index_impl(ds_ref, &column, row_id, frame_index)
             .await
-            .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("take_frame_by_index failed: {}", e)))
+            .map_err(|e| {
+                pyo3::exceptions::PyIOError::new_err(format!("take_frame_by_index failed: {}", e))
+            })
     });
-    
+
     match result {
         Ok(Ok(frame)) => Ok(PyVideoFrameBytes {
             bytes: frame.bytes,
