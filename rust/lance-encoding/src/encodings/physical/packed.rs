@@ -696,11 +696,19 @@ impl VariablePerValueDecompressor for PackedStructVariablePerValueDecompressor {
                     },
                     FieldAccumulator::Fixed { builder, .. },
                 ) => {
-                    let DataBlock::FixedWidth(block) = builder.finish() else {
-                        panic!("Expected fixed-width datablock from builder");
-                    };
-                    let decoded = decompressor.decompress(block, num_values)?;
-                    children.push(decoded);
+                    let block = builder.finish();
+                    match block {
+                        DataBlock::AllNull(all_null) => {
+                            children.push(DataBlock::AllNull(all_null));
+                        }
+                        DataBlock::FixedWidth(block) => {
+                            let decoded = decompressor.decompress(block, num_values)?;
+                            children.push(decoded);
+                        }
+                        _ => {
+                            panic!("Expected fixed-width or all-null datablock from builder");
+                        }
+                    }
                 }
                 (
                     VariablePackedStructFieldDecoder {
@@ -890,6 +898,86 @@ mod tests {
         let decoded_id = decoded_struct.children[0].as_fixed_width_ref().unwrap();
         assert_eq!(decoded_id.bits_per_value, 32);
         assert_eq!(decoded_id.data.as_ref(), id_bytes.as_slice());
+
+        let decoded_name = decoded_struct.children[1].as_variable_width_ref().unwrap();
+        assert_eq!(decoded_name.bits_per_offset, 32);
+        let decoded_offsets = decoded_name.offsets.borrow_to_typed_slice::<i32>();
+        assert_eq!(decoded_offsets.as_ref(), name_offsets.as_slice());
+        assert_eq!(decoded_name.data.as_ref(), name_bytes.as_slice());
+
+        Ok(())
+    }
+
+    #[test]
+    fn variable_packed_struct_all_null_fixed_field_round_trip() -> Result<()> {
+        // An all-null fixed-width child is packed with zero bits per value;
+        // it must decode back into an all-null block instead of failing in the
+        // fixed-width decompressor.
+        let arrow_fields: Fields = vec![
+            ArrowField::new("id", DataType::UInt32, true),
+            ArrowField::new("name", DataType::Utf8, false),
+        ]
+        .into();
+        let arrow_struct = ArrowField::new("item", DataType::Struct(arrow_fields), false);
+        let struct_field = Field::try_from(&arrow_struct)?;
+
+        let id_block = DataBlock::from_arrays(&[Arc::new(UInt32Array::new_null(3)) as ArrayRef], 3);
+        let DataBlock::AllNull(id_block) = id_block else {
+            panic!("expected all-null data block for all-null array");
+        };
+
+        let name_offsets = vec![0_i32, 1, 4, 4];
+        let name_bytes = b"abcz".to_vec();
+        let mut name_block = VariableWidthBlock {
+            data: LanceBuffer::from(name_bytes.clone()),
+            bits_per_offset: 32,
+            offsets: LanceBuffer::reinterpret_vec(name_offsets.clone()),
+            num_values: 3,
+            block_info: BlockInfo::new(),
+        };
+        name_block.compute_stat();
+        let name_block = DataBlock::VariableWidth(name_block);
+
+        let struct_block = StructDataBlock {
+            children: vec![DataBlock::AllNull(id_block), name_block],
+            block_info: BlockInfo::new(),
+            validity: None,
+        };
+
+        let data_block = DataBlock::Struct(struct_block);
+
+        let compression_strategy =
+            DefaultCompressionStrategy::new().with_version(LanceFileVersion::V2_2);
+        let compressor = crate::compression::CompressionStrategy::create_per_value(
+            &compression_strategy,
+            &struct_field,
+            &data_block,
+        )?;
+        let (compressed, encoding) = compressor.compress(data_block)?;
+
+        let PerValueDataBlock::Variable(zipped) = compressed else {
+            panic!("expected variable-width packed struct output");
+        };
+
+        let decompression_strategy = DefaultDecompressionStrategy::default();
+        let decompressor =
+            crate::compression::DecompressionStrategy::create_variable_per_value_decompressor(
+                &decompression_strategy,
+                &encoding,
+            )?;
+        let decoded = decompressor.decompress(zipped)?;
+
+        let DataBlock::Struct(decoded_struct) = decoded else {
+            panic!("expected struct datablock after decode");
+        };
+
+        assert!(
+            matches!(
+                &decoded_struct.children[0],
+                DataBlock::AllNull(block) if block.num_values == 3
+            ),
+            "all-null fixed child should decode back into an all-null block"
+        );
 
         let decoded_name = decoded_struct.children[1].as_variable_width_ref().unwrap();
         assert_eq!(decoded_name.bits_per_offset, 32);

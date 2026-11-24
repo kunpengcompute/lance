@@ -9,7 +9,16 @@ import warnings
 from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
 from . import io, log
-from .blob import Blob, BlobArray, BlobColumn, BlobFile, blob_array, blob_field
+from .blob import (
+    Blob,
+    BlobArray,
+    BlobColumn,
+    BlobFile,
+    VideoFrameBytes,
+    blob_array,
+    blob_field,
+    take_frame_by_index,
+)
 from .dataset import (
     DataStatistics,
     FieldStatistics,
@@ -91,6 +100,7 @@ __all__ = [
     "MergeInsertBuilder",
     "ScanStatistics",
     "Transaction",
+    "VideoFrameBytes",
     "__version__",
     "batch_udf",
     "bytes_read_counter",
@@ -100,6 +110,7 @@ __all__ = [
     "json_to_schema",
     "schema_to_json",
     "set_logger",
+    "take_frame_by_index",
     "write_dataset",
     "FFILanceTableProvider",
     "IndexProgress",

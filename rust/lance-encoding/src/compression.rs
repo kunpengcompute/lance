@@ -579,6 +579,7 @@ impl CompressionStrategy for DefaultCompressionStrategy {
         match data {
             DataBlock::FixedWidth(_) => Ok(Box::new(ValueEncoder::default())),
             DataBlock::FixedSizeList(_) => Ok(Box::new(ValueEncoder::default())),
+            DataBlock::AllNull(_) => Ok(Box::new(ValueEncoder::default())),
             DataBlock::Struct(struct_block) => {
                 if field.children.len() != struct_block.children.len() {
                     return Err(Error::invalid_input(

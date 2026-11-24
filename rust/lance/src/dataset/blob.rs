@@ -14,8 +14,8 @@ use arrow::array::AsArray;
 use arrow::datatypes::{UInt8Type, UInt32Type, UInt64Type};
 use arrow_array::RecordBatch;
 use arrow_array::builder::{LargeBinaryBuilder, PrimitiveBuilder, StringBuilder};
-use arrow_array::{Array, ArrayRef};
-use arrow_schema::{DataType as ArrowDataType, Field as ArrowField};
+use arrow_array::{Array, ArrayRef, LargeBinaryArray, StringArray};
+use arrow_schema::{DataType as ArrowDataType, Field as ArrowField, Fields};
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
@@ -776,6 +776,114 @@ impl BlobPreprocessor {
             .downcast_ref::<StructArray>()
             .ok_or_else(|| Error::invalid_input("Blob column was not a struct array"))?;
 
+        let is_new_format = struct_arr.column_by_name("kind").is_some();
+        let blob_info_col = struct_arr.column_by_name("blob_info");
+
+        if is_new_format {
+            let kind_col = struct_arr
+                .column_by_name("kind")
+                .map(|col| col.as_primitive::<UInt8Type>());
+            let position_col = struct_arr
+                .column_by_name("position")
+                .map(|col| col.as_primitive::<UInt64Type>());
+            let size_col = struct_arr
+                .column_by_name("size")
+                .map(|col| col.as_primitive::<UInt64Type>());
+            let blob_id_col = struct_arr
+                .column_by_name("blob_id")
+                .map(|col| col.as_primitive::<arrow_array::types::UInt32Type>());
+
+            let mut kind_builder = PrimitiveBuilder::<UInt8Type>::with_capacity(struct_arr.len());
+            let mut position_builder =
+                PrimitiveBuilder::<arrow_array::types::UInt64Type>::with_capacity(struct_arr.len());
+            let mut blob_size_builder =
+                PrimitiveBuilder::<arrow_array::types::UInt64Type>::with_capacity(struct_arr.len());
+            let mut blob_id_builder =
+                PrimitiveBuilder::<arrow_array::types::UInt32Type>::with_capacity(struct_arr.len());
+
+            let struct_nulls = struct_arr.nulls();
+
+            for i in 0..struct_arr.len() {
+                if struct_arr.is_null(i) {
+                    kind_builder.append_null();
+                    position_builder.append_null();
+                    blob_size_builder.append_null();
+                    blob_id_builder.append_null();
+                    continue;
+                }
+
+                let kind_val = kind_col
+                    .as_ref()
+                    .map(|col| if col.is_null(i) { 0u8 } else { col.value(i) })
+                    .unwrap_or(0);
+                let pos_val = position_col
+                    .as_ref()
+                    .map(|col| if col.is_null(i) { 0u64 } else { col.value(i) })
+                    .unwrap_or(0);
+                let size_val = size_col
+                    .as_ref()
+                    .map(|col| if col.is_null(i) { 0u64 } else { col.value(i) })
+                    .unwrap_or(0);
+                let bid_val = blob_id_col
+                    .as_ref()
+                    .map(|col| if col.is_null(i) { 0u32 } else { col.value(i) })
+                    .unwrap_or(0);
+
+                kind_builder.append_value(kind_val);
+                position_builder.append_value(pos_val);
+                blob_size_builder.append_value(size_val);
+                blob_id_builder.append_value(bid_val);
+            }
+
+            let row_count = struct_arr.len();
+            // Preserve the caller-provided blob_uri and data columns instead of
+            // dropping them: a descriptor written without its uri loses the
+            // external location and can no longer be read back.
+            let uri_col = struct_arr
+                .column_by_name("blob_uri")
+                .cloned()
+                .unwrap_or_else(|| Arc::new(StringArray::new_null(row_count)));
+            let data_col = struct_arr
+                .column_by_name("data")
+                .cloned()
+                .unwrap_or_else(|| Arc::new(LargeBinaryArray::new_null(row_count)));
+            let blob_info_arr = blob_info_col
+                .cloned()
+                .unwrap_or_else(|| Arc::new(LargeBinaryArray::new_null(row_count)));
+            let children: Vec<ArrayRef> = vec![
+                Arc::new(kind_builder.finish()),
+                Arc::new(position_builder.finish()),
+                Arc::new(blob_size_builder.finish()),
+                Arc::new(blob_id_builder.finish()),
+                uri_col,
+                blob_info_arr,
+                data_col,
+            ];
+            // The in-memory descriptor struct is declared nullable even though
+            // the on-disk contract (BLOB_V2_DESC_FIELDS) is not: null rows and
+            // inline rows legitimately leave columns null here, and the logical
+            // blob encoder re-derives the on-disk values itself.
+            let descriptor_fields: Fields = lance_core::datatypes::BLOB_V2_DESC_FIELDS
+                .iter()
+                .map(|f| ArrowField::new(f.name(), f.data_type().clone(), true))
+                .collect::<Vec<_>>()
+                .into();
+            let descriptor_array = Arc::new(StructArray::try_new(
+                descriptor_fields.clone(),
+                children,
+                struct_nulls.cloned(),
+            )?) as ArrayRef;
+
+            // The returned field must describe the descriptor array we actually
+            // produced, not the caller's original struct schema, while keeping
+            // any caller metadata (e.g. blob size thresholds) intact.
+            let out_field = Arc::new(
+                ArrowField::new(field.name(), ArrowDataType::Struct(descriptor_fields), true)
+                    .with_metadata(field.metadata().clone()),
+            );
+            return Ok((descriptor_array, out_field));
+        }
+
         let data_col = struct_arr
             .column_by_name("data")
             .ok_or_else(|| Error::invalid_input("Blob struct missing `data` field"))?
@@ -986,24 +1094,27 @@ impl BlobPreprocessor {
             }
         }
 
-        let child_fields = vec![
-            ArrowField::new("kind", ArrowDataType::UInt8, true),
-            ArrowField::new("data", ArrowDataType::LargeBinary, true),
-            ArrowField::new("uri", ArrowDataType::Utf8, true),
-            ArrowField::new("blob_id", ArrowDataType::UInt32, true),
-            ArrowField::new("blob_size", ArrowDataType::UInt64, true),
-            ArrowField::new("position", ArrowDataType::UInt64, true),
-        ];
+        // The encoder selects columns by name from BLOB_V2_DESC_FIELDS order
+        // (kind, position, size, blob_id, blob_uri, blob_info, data). The
+        // fields are declared nullable here because this in-memory struct is
+        // rebuilt row-by-row below and nulls may appear for rows whose kind
+        // never reads that column (e.g. inline rows leave blob_uri null).
+        let child_fields: Vec<ArrowField> = lance_core::datatypes::BLOB_V2_DESC_FIELDS
+            .iter()
+            .map(|f| ArrowField::new(f.name(), f.data_type().clone(), true))
+            .collect();
+        let blob_info_col = Arc::new(LargeBinaryArray::new_null(struct_arr.len()));
 
         let struct_array = StructArray::try_new(
             child_fields.clone().into(),
             vec![
                 Arc::new(kind_builder.finish()),
-                Arc::new(data_builder.finish()),
-                Arc::new(uri_builder.finish()),
-                Arc::new(blob_id_builder.finish()),
-                Arc::new(blob_size_builder.finish()),
                 Arc::new(position_builder.finish()),
+                Arc::new(blob_size_builder.finish()),
+                Arc::new(blob_id_builder.finish()),
+                Arc::new(uri_builder.finish()),
+                blob_info_col,
+                Arc::new(data_builder.finish()),
             ],
             struct_nulls.cloned(),
         )?;
@@ -2130,7 +2241,7 @@ fn blob_version_from_descriptions(descriptions: &StructArray) -> Result<BlobVers
     if fields.len() == 2 && fields[0].name() == "position" && fields[1].name() == "size" {
         return Ok(BlobVersion::V1);
     }
-    if fields.len() == 5
+    if fields.len() >= 5
         && fields[0].name() == "kind"
         && fields[1].name() == "position"
         && fields[2].name() == "size"
@@ -2140,7 +2251,7 @@ fn blob_version_from_descriptions(descriptions: &StructArray) -> Result<BlobVers
         return Ok(BlobVersion::V2);
     }
     Err(Error::invalid_input_source(format!(
-        "Unrecognized blob descriptions schema: expected v1 (position,size) or v2 (kind,position,size,blob_id,blob_uri) but got {:?}",
+        "Unrecognized blob descriptions schema: expected v1 (position,size) or v2 (kind,position,size,blob_id,blob_uri[,blob_info,data]) but got {:?}",
         fields.iter().map(|f| f.name().as_str()).collect::<Vec<_>>(),
     )
     .into()))

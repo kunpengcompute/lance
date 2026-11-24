@@ -312,6 +312,7 @@ struct FixedWidthDataBlockBuilder {
     bits_per_value: u64,
     bytes_per_value: u64,
     values: Vec<u8>,
+    num_values: u64,
 }
 
 impl FixedWidthDataBlockBuilder {
@@ -321,6 +322,7 @@ impl FixedWidthDataBlockBuilder {
             bits_per_value,
             bytes_per_value: bits_per_value / 8,
             values: Vec::with_capacity(estimated_size_bytes as usize),
+            num_values: 0,
         }
     }
 }
@@ -332,9 +334,15 @@ impl DataBlockBuilderImpl for FixedWidthDataBlockBuilder {
         let start = selection.start as usize * self.bytes_per_value as usize;
         let end = selection.end as usize * self.bytes_per_value as usize;
         self.values.extend_from_slice(&block.data[start..end]);
+        self.num_values += selection.end - selection.start;
     }
 
     fn finish(self: Box<Self>) -> DataBlock {
+        if self.bits_per_value == 0 {
+            return DataBlock::AllNull(AllNullDataBlock {
+                num_values: self.num_values,
+            });
+        }
         let num_values = (self.values.len() / self.bytes_per_value as usize) as u64;
         DataBlock::FixedWidth(FixedWidthDataBlock {
             data: LanceBuffer::from(self.values),

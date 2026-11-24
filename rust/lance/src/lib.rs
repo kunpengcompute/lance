@@ -92,6 +92,7 @@ pub mod pb {
 
 pub use blob::{BlobArrayBuilder, BlobFieldOptions, blob_field, blob_field_with_options};
 pub use dataset::Dataset;
+pub use dataset::blob_video::{VideoFrameBytes, take_frame_by_index};
 use lance_index::vector::DIST_COL;
 
 /// Creates and loads a [`Dataset`] from the given path.
